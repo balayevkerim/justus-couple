@@ -130,7 +130,7 @@ export const validateAndConnect = async (enteredCode: string, currentUserId: str
       console.log('Partner user data:', partnerUserSnap.data());
     }
     
-    // Create current user if doesn't exist
+   /*  // Create current user if doesn't exist
     if (!currentUserSnap.exists()) {
       console.log('Creating missing user document for:', currentUserId);
       await setDoc(currentUserRef, {
@@ -143,9 +143,9 @@ export const validateAndConnect = async (enteredCode: string, currentUserId: str
       });
     } else {
       console.log('Current user document already exists, will update');
-    }
+    } */
     
-    // Create partner user if doesn't exist
+   /*  // Create partner user if doesn't exist
     if (!partnerUserSnap.exists()) {
       console.log('Creating missing user document for:', partnerUserId);
       await setDoc(partnerUserRef, {
@@ -158,7 +158,7 @@ export const validateAndConnect = async (enteredCode: string, currentUserId: str
       });
     } else {
       console.log('Partner user document already exists, will update');
-    }
+    } */
     
     // Update both users' partnerId
     console.log('Updating partner IDs...');
@@ -333,10 +333,12 @@ export const getGalleryEntries = async (limit = 20) => {
 // Heartbeat Management
 export const sendHeartbeat = async (heartbeat: Omit<Heartbeat, 'id'>) => {
   try {
-    const docRef = await addDoc(collection(db, 'heartbeats'), {
+    const heartbeatData = {
       ...heartbeat,
       timestamp: serverTimestamp(),
-    });
+    };
+    
+    const docRef = await addDoc(collection(db, 'heartbeats'), heartbeatData);
     return docRef.id;
   } catch (error) {
     console.error('Error sending heartbeat:', error);
@@ -349,18 +351,50 @@ export const getHeartbeats = async (userId: string) => {
     const heartbeatsRef = collection(db, 'heartbeats');
     const q = query(
       heartbeatsRef,
-      where('userId', '==', userId),
-      orderBy('timestamp', 'desc')
+      where('recipientId', '==', userId)
+      // Removed orderBy to avoid composite index requirement
     );
     const querySnapshot = await getDocs(q);
-    return querySnapshot.docs.map(doc => ({
+    const heartbeats = querySnapshot.docs.map(doc => ({
       id: doc.id,
       ...doc.data()
     })) as Heartbeat[];
+    
+    // Sort on client side by timestamp (newest first)
+    return heartbeats.sort((a, b) => {
+      const timestampA = a.timestamp instanceof Date ? a.timestamp : 
+        (a.timestamp as any)?.toDate?.() || new Date(0);
+      const timestampB = b.timestamp instanceof Date ? b.timestamp : 
+        (b.timestamp as any)?.toDate?.() || new Date(0);
+      return timestampB.getTime() - timestampA.getTime();
+    });
   } catch (error) {
     console.error('Error getting heartbeats:', error);
     throw error;
   }
+};
+
+// Real-time heartbeat subscription
+export const subscribeToHeartbeats = (userId: string, callback: (heartbeat: Heartbeat) => void) => {
+  const heartbeatsRef = collection(db, 'heartbeats');
+  const q = query(
+    heartbeatsRef,
+    where('recipientId', '==', userId)
+    // Removed orderBy to avoid composite index requirement
+  );
+  
+  const unsubscribe = onSnapshot(q, (querySnapshot) => {
+    querySnapshot.docChanges().forEach((change) => {
+      if (change.type === 'added') {
+        const heartbeatData = { id: change.doc.id, ...change.doc.data() } as Heartbeat;
+        callback(heartbeatData);
+      }
+    });
+  }, (error) => {
+    console.error('Real-time heartbeat listener error:', error);
+  });
+  
+  return unsubscribe;
 };
 
 // Real-time updates subscription

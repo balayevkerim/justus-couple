@@ -35,6 +35,10 @@ export interface Heartbeat {
   scheduledTime: Date;
   sent: boolean;
   type: 'love' | 'reminder' | 'surprise';
+  senderId: string;
+  senderName: string;
+  recipientId: string;
+  timestamp?: Date;
 }
 
 export interface DailyScore {

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -8,20 +8,27 @@ import {
   Alert,
   Dimensions,
   StyleSheet,
+  AppState,
 } from 'react-native';
 import { LinearGradient } from 'expo-linear-gradient';
 import { Ionicons } from '@expo/vector-icons';
 import { useNavigation } from '@react-navigation/native';
 import { useApp } from '../context/AppContext';
 import { mockSurpriseWheel, mockDailyScores } from '../data/mockData';
+import HeartbeatModal from '../components/HeartbeatModal';
+import { NotificationService } from '../services/notificationService';
+import { Heartbeat } from '../types';
 
 const { width } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const navigation = useNavigation();
-  const { state } = useApp();
+  const { state, dispatch } = useApp();
   const [isSpinning, setIsSpinning] = useState(false);
   const [lastResult, setLastResult] = useState<string | null>(null);
+  const [showHeartbeatModal, setShowHeartbeatModal] = useState(false);
+  const [appState, setAppState] = useState(AppState.currentState);
+  const [currentHeartbeat, setCurrentHeartbeat] = useState<Heartbeat | null>(null);
 
   const currentUser = state.currentUser;
   const partner = state.partner;
@@ -29,6 +36,62 @@ export default function HomeScreen() {
 
   // Check if user has a partner
   const hasPartner = currentUser?.partnerId && partner;
+
+  // Handle app state changes
+  useEffect(() => {
+    const handleAppStateChange = (nextAppState: string) => {
+      setAppState(nextAppState as any);
+    };
+
+    const subscription = AppState.addEventListener('change', handleAppStateChange);
+    return () => {
+      subscription?.remove();
+    };
+  }, []);
+
+  // Handle heartbeat notifications
+  useEffect(() => {
+    if (state.pendingHeartbeat && partner) {
+      // Show the heartbeat modal
+      setShowHeartbeatModal(true);
+      setCurrentHeartbeat(state.pendingHeartbeat);
+      
+      // Schedule notification if enabled
+      if (state.settings.notifications) {
+        NotificationService.scheduleHeartbeatNotification(
+          state.pendingHeartbeat.senderName || 'Your partner',
+          state.pendingHeartbeat.message,
+          state.pendingHeartbeat
+        );
+      }
+      
+      // Clear the pending heartbeat immediately to prevent duplicates on refresh
+      dispatch({ type: 'SET_PENDING_HEARTBEAT', payload: null });
+    }
+  }, [state.pendingHeartbeat, partner, state.settings.notifications, dispatch]);
+
+  // Set up notification listeners
+  useEffect(() => {
+    const notificationListener = NotificationService.addNotificationReceivedListener((notification) => {
+      console.log('Notification received:', notification);
+    });
+
+    const responseListener = NotificationService.addNotificationResponseReceivedListener((response) => {
+      console.log('Notification response:', response);
+      // Handle notification tap
+      if ((response as any).request?.content?.data?.type === 'heartbeat') {
+        const heartbeatData = (response as any).request.content.data.heartbeatData;
+        if (heartbeatData) {
+          dispatch({ type: 'SET_PENDING_HEARTBEAT', payload: heartbeatData });
+        }
+      }
+    });
+
+    return () => {
+      notificationListener.remove();
+      responseListener.remove();
+    };
+  }, [dispatch]);
 
   const spinWheel = () => {
     if (isSpinning) return;
@@ -53,183 +116,272 @@ export default function HomeScreen() {
 
   const currentChallenge = getCurrentChallenge();
 
+  const handleHeartbeatModalClose = () => {
+    setShowHeartbeatModal(false);
+    // No need to clear pending heartbeat here since it's already cleared
+  };
+
   return (
-    <ScrollView style={styles.container}>
-      {/* Header */}
-      <LinearGradient
-        colors={['#ef4444', '#dc2626']}
-        style={styles.header}
-      >
-        <View style={styles.headerContent}>
-          <View>
-            <Text style={styles.welcomeText}>
-              Welcome back, {currentUser?.name}! 💕
-            </Text>
-            <Text style={styles.levelText}>
-              Level {currentUser?.level} • {currentUser?.points} points
-            </Text>
-          </View>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('Settings' as never)}
-            style={styles.settingsButton}
-          >
-            <Ionicons name="settings-outline" size={24} color="white" />
-          </TouchableOpacity>
-        </View>
-      </LinearGradient>
-
-      {/* Today's Score */}
-      <View style={styles.scoreCard}>
-        <Text style={styles.cardTitle}>
-          Today's Progress 📊
-        </Text>
-        <View style={styles.scoreRow}>
-          <View style={styles.scoreItem}>
-            <Text style={styles.scoreNumber}>
-              {todayScore.points}
-            </Text>
-            <Text style={styles.scoreLabel}>Points</Text>
-          </View>
-          <View style={styles.scoreItem}>
-            <Text style={[styles.scoreNumber, { color: '#d946ef' }]}>
-              {todayScore.challengesCompleted}
-            </Text>
-            <Text style={styles.scoreLabel}>Challenges</Text>
-          </View>
-          <View style={styles.scoreItem}>
-            <Text style={[styles.scoreNumber, { color: '#10b981' }]}>
-              {todayScore.heartbeatsSent}
-            </Text>
-            <Text style={styles.scoreLabel}>Heartbeats</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Daily Challenge */}
-      {currentChallenge && (
-        <TouchableOpacity
-          onPress={() => navigation.navigate('ChallengeDetail' as never)}
-          style={styles.challengeCard}
+    <>
+      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
+        {/* Header */}
+        <LinearGradient
+          colors={['#ef4444', '#dc2626']}
+          style={styles.header}
         >
-          <View style={styles.challengeContent}>
-            <View style={styles.challengeText}>
-              <Text style={styles.challengeTitle}>
-                Today's Challenge 🎯
+          <View style={styles.headerContent}>
+            <View>
+              <Text style={styles.welcomeText}>
+                Welcome back, {currentUser?.name}! 💕
               </Text>
-              <Text style={styles.challengeDescription}>
-                {currentChallenge.prompt}
-              </Text>
-              <Text style={styles.challengePoints}>
-                +{currentChallenge.points} points
+              <Text style={styles.levelText}>
+                Level {currentUser?.level} • {currentUser?.points} points
               </Text>
             </View>
-            <Ionicons name="chevron-forward" size={24} color="#6b7280" />
-          </View>
-        </TouchableOpacity>
-      )}
-
-      {/* Surprise Wheel */}
-      <View style={styles.wheelCard}>
-        <Text style={styles.cardTitle}>
-          Surprise Wheel 🎡
-        </Text>
-        <TouchableOpacity
-          onPress={spinWheel}
-          disabled={isSpinning}
-          style={[
-            styles.wheelButton,
-            isSpinning && styles.wheelButtonDisabled
-          ]}
-        >
-          {isSpinning ? (
-            <Text style={styles.wheelButtonText}>Spinning...</Text>
-          ) : (
-            <View style={styles.wheelContent}>
-              <Ionicons name="refresh" size={32} color="white" />
-              <Text style={styles.wheelButtonText}>
-                Spin for Surprise!
-              </Text>
-            </View>
-          )}
-        </TouchableOpacity>
-        {lastResult && (
-          <Text style={styles.lastResult}>
-            Last: {lastResult}
-          </Text>
-        )}
-      </View>
-
-      {/* Partner Status */}
-      <View style={styles.partnerCard}>
-        <Text style={styles.cardTitle}>
-          {hasPartner ? `${partner?.name} 💝` : 'Connect with Partner 💕'}
-        </Text>
-        {hasPartner ? (
-          <View style={styles.partnerContent}>
-            <View style={styles.partnerInfo}>
-              <View style={styles.partnerAvatar}>
-                <Text style={styles.partnerInitial}>
-                  {partner?.name?.charAt(0)}
-                </Text>
-              </View>
-              <View>
-                <Text style={styles.partnerName}>
-                  Level {partner?.level}
-                </Text>
-                <Text style={styles.partnerPoints}>
-                  {partner?.points} points
-                </Text>
-              </View>
-            </View>
-            <View style={styles.partnerStatus}>
-              <View style={styles.onlineIndicator}>
-                <View style={styles.onlineDot} />
-                <Text style={styles.onlineText}>Online</Text>
-              </View>
-              <Text style={styles.lastActive}>
-                Last active: 2m ago
-              </Text>
-            </View>
-          </View>
-        ) : (
-          <View style={styles.noPartnerContent}>
-            <Ionicons name="people-outline" size={48} color="#6b7280" />
-            <Text style={styles.noPartnerText}>
-              Connect with your partner to start sharing memories and challenges together!
-            </Text>
             <TouchableOpacity
-              onPress={() => navigation.navigate('PartnerConnection' as never)}
-              style={styles.connectPartnerButton}
+              onPress={() => navigation.navigate('Settings' as never)}
+              style={styles.settingsButton}
             >
-              <Text style={styles.connectPartnerButtonText}>Connect Now</Text>
+              <Ionicons name="settings-outline" size={24} color="white" />
             </TouchableOpacity>
           </View>
-        )}
-      </View>
+        </LinearGradient>
 
-      {/* Quick Actions */}
-      <View style={styles.quickActions}>
-        <Text style={styles.cardTitle}>
-          Quick Actions ⚡
-        </Text>
-        <View style={styles.actionButtons}>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('Gallery' as never)}
-            style={styles.actionButton}
-          >
-            <Ionicons name="images-outline" size={24} color="#ef4444" />
-            <Text style={styles.actionText}>Gallery</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            onPress={() => navigation.navigate('Challenges' as never)}
-            style={styles.actionButton}
-          >
-            <Ionicons name="trophy-outline" size={24} color="#ef4444" />
-            <Text style={styles.actionText}>Challenges</Text>
-          </TouchableOpacity>
+        {/* Today's Score */}
+        <View style={styles.scoreCard}>
+          <Text style={styles.cardTitle}>
+            Today's Progress 📊
+          </Text>
+          <View style={styles.scoreRow}>
+            <View style={styles.scoreItem}>
+              <Text style={styles.scoreNumber}>
+                {todayScore.points}
+              </Text>
+              <Text style={styles.scoreLabel}>Points</Text>
+            </View>
+            <View style={styles.scoreItem}>
+              <Text style={[styles.scoreNumber, { color: '#d946ef' }]}>
+                {todayScore.challengesCompleted}
+              </Text>
+              <Text style={styles.scoreLabel}>Challenges</Text>
+            </View>
+            <View style={styles.scoreItem}>
+              <Text style={[styles.scoreNumber, { color: '#10b981' }]}>
+                {state.heartbeats.length}
+              </Text>
+              <Text style={styles.scoreLabel}>Heartbeats</Text>
+            </View>
+          </View>
         </View>
-      </View>
-    </ScrollView>
+
+        {/* Latest Heartbeat */}
+        {state.heartbeats.length > 0 && (
+          <View style={styles.latestHeartbeatCard}>
+            <Text style={styles.cardTitle}>
+              Latest Heartbeat 💕
+            </Text>
+            <View style={styles.heartbeatContent}>
+              <Text style={styles.heartbeatSender}>
+                From: {state.heartbeats[0].senderName}
+              </Text>
+              <Text style={styles.heartbeatMessage}>
+                "{state.heartbeats[0].message}"
+              </Text>
+              <Text style={styles.heartbeatTime}>
+                {state.heartbeats[0].timestamp ? 
+                  new Date(state.heartbeats[0].timestamp instanceof Date ? 
+                    state.heartbeats[0].timestamp : 
+                    (state.heartbeats[0].timestamp as any)?.toDate?.() || new Date()
+                  ).toLocaleTimeString() : 
+                  'Just now'
+                }
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Daily Challenge */}
+        {currentChallenge && (
+          <TouchableOpacity
+            onPress={() => navigation.navigate('ChallengeDetail' as never)}
+            style={styles.challengeCard}
+          >
+            <View style={styles.challengeContent}>
+              <View style={styles.challengeText}>
+                <Text style={styles.challengeTitle}>
+                  Today's Challenge 🎯
+                </Text>
+                <Text style={styles.challengeDescription}>
+                  {currentChallenge.prompt}
+                </Text>
+                <Text style={styles.challengePoints}>
+                  +{currentChallenge.points} points
+                </Text>
+              </View>
+              <Ionicons name="chevron-forward" size={24} color="#6b7280" />
+            </View>
+          </TouchableOpacity>
+        )}
+
+        {/* Surprise Wheel */}
+        <View style={styles.wheelCard}>
+          <Text style={styles.cardTitle}>
+            Surprise Wheel 🎡
+          </Text>
+          <TouchableOpacity
+            onPress={spinWheel}
+            disabled={isSpinning}
+            style={[
+              styles.wheelButton,
+              isSpinning && styles.wheelButtonDisabled
+            ]}
+          >
+            {isSpinning ? (
+              <Text style={styles.wheelButtonText}>Spinning...</Text>
+            ) : (
+              <View style={styles.wheelContent}>
+                <Ionicons name="refresh" size={32} color="white" />
+                <Text style={styles.wheelButtonText}>
+                  Spin for Surprise!
+                </Text>
+              </View>
+            )}
+          </TouchableOpacity>
+          {lastResult && (
+            <Text style={styles.lastResult}>
+              Last: {lastResult}
+            </Text>
+          )}
+        </View>
+
+        {/* Partner Status */}
+        <View style={styles.partnerCard}>
+          <Text style={styles.cardTitle}>
+            {hasPartner ? `${partner?.name} 💝` : 'Connect with Partner 💕'}
+          </Text>
+          {hasPartner ? (
+            <View style={styles.partnerContent}>
+              <View style={styles.partnerInfo}>
+                <View style={styles.partnerAvatar}>
+                  <Text style={styles.partnerInitial}>
+                    {partner?.name?.charAt(0)}
+                  </Text>
+                </View>
+                <View>
+                  <Text style={styles.partnerName}>
+                    Level {partner?.level}
+                  </Text>
+                  <Text style={styles.partnerPoints}>
+                    {partner?.points} points
+                  </Text>
+                </View>
+              </View>
+              <View style={styles.partnerStatus}>
+                <View style={styles.onlineIndicator}>
+                  <View style={styles.onlineDot} />
+                  <Text style={styles.onlineText}>Online</Text>
+                </View>
+                <Text style={styles.lastActive}>
+                  Last active: 2m ago
+                </Text>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.noPartnerContent}>
+              <Ionicons name="people-outline" size={48} color="#6b7280" />
+              <Text style={styles.noPartnerText}>
+                Connect with your partner to start sharing memories and challenges together!
+              </Text>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('PartnerConnection' as never)}
+                style={styles.connectPartnerButton}
+              >
+                <Text style={styles.connectPartnerButtonText}>Connect Now</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* Quick Actions */}
+        <View style={styles.quickActions}>
+          <Text style={styles.cardTitle}>
+            Quick Actions ⚡
+          </Text>
+          <View style={styles.actionButtons}>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Gallery' as never)}
+              style={styles.actionButton}
+            >
+              <Ionicons name="images-outline" size={24} color="#ef4444" />
+              <Text style={styles.actionText}>Gallery</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('Challenges' as never)}
+              style={styles.actionButton}
+            >
+              <Ionicons name="trophy-outline" size={24} color="#ef4444" />
+              <Text style={styles.actionText}>Challenges</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => navigation.navigate('SendHeartbeat' as never)}
+              style={styles.actionButton}
+            >
+              <Ionicons name="heart-outline" size={24} color="#ef4444" />
+              <Text style={styles.actionText}>Send Heart</Text>
+            </TouchableOpacity>
+          </View>
+          
+          {/* Test Notification Button */}
+          {__DEV__ && (
+            <TouchableOpacity
+              onPress={async () => {
+                console.log('Testing notification...');
+                await NotificationService.sendTestNotification();
+                Alert.alert('Test', 'Test notification sent! Check if you received it.');
+              }}
+              style={[styles.actionButton, { marginTop: 16, backgroundColor: '#10b981' }]}
+            >
+              <Text style={[styles.actionText, { color: 'white' }]}>🔔 Test Notification</Text>
+            </TouchableOpacity>
+          )}
+          
+          {/* Test Falling Hearts Button */}
+          {__DEV__ && (
+            <TouchableOpacity
+              onPress={() => {
+                console.log('Testing falling hearts...');
+                const testHeartbeat = {
+                  id: 'test',
+                  message: 'This is a test heartbeat with falling hearts! 💕',
+                  senderName: 'Test Partner',
+                  scheduledTime: new Date(),
+                  sent: true,
+                  type: 'love' as const,
+                  senderId: 'test',
+                  recipientId: 'test',
+                  timestamp: new Date()
+                };
+                setCurrentHeartbeat(testHeartbeat);
+                setShowHeartbeatModal(true);
+              }}
+              style={[styles.actionButton, { marginTop: 8, backgroundColor: '#f59e0b' }]}
+            >
+              <Text style={[styles.actionText, { color: 'white' }]}>💕 Test Falling Hearts</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      </ScrollView>
+
+      {/* Heartbeat Modal */}
+      {showHeartbeatModal && currentHeartbeat && (
+        <HeartbeatModal
+          isVisible={showHeartbeatModal}
+          message={currentHeartbeat.message}
+          partnerName={currentHeartbeat.senderName || 'Your partner'}
+          onClose={handleHeartbeatModalClose}
+        />
+      )}
+    </>
   );
 }
 
@@ -239,7 +391,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#f9fafb',
   },
   header: {
-    paddingTop: 48,
+    paddingTop: 78,
     paddingBottom: 24,
     paddingHorizontal: 16,
   },
@@ -464,6 +616,7 @@ const styles = StyleSheet.create({
   actionButtons: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    gap: 8,
   },
   actionButton: {
     backgroundColor: 'white',
@@ -475,12 +628,55 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 2,
     flex: 1,
-    marginHorizontal: 4,
     alignItems: 'center',
   },
   actionText: {
     color: '#1f2937',
     fontWeight: '500',
     marginTop: 4,
+  },
+  testButton: {
+    backgroundColor: '#4f46e5',
+    paddingVertical: 12,
+    paddingHorizontal: 25,
+    borderRadius: 10,
+    alignSelf: 'center',
+    marginTop: 10,
+  },
+  testButtonText: {
+    color: 'white',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  latestHeartbeatCard: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 16,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.1,
+    shadowRadius: 2,
+    elevation: 2,
+  },
+  heartbeatContent: {
+    marginTop: 10,
+  },
+  heartbeatSender: {
+    fontSize: 14,
+    fontWeight: '500',
+    color: '#1f2937',
+    marginBottom: 2,
+  },
+  heartbeatMessage: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#ef4444',
+    marginBottom: 2,
+  },
+  heartbeatTime: {
+    fontSize: 12,
+    color: '#6b7280',
   },
 }); 

@@ -1,8 +1,8 @@
 import React, { createContext, useContext, useReducer, ReactNode, useEffect, useRef } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { User, Challenge, GalleryEntry, AppSettings } from '../types';
+import { User, Challenge, GalleryEntry, AppSettings, Heartbeat } from '../types';
 import { mockUsers, mockChallenges, mockGalleryEntries } from '../data/mockData';
-import { subscribeToUserUpdates, subscribeToPartnerUpdates } from '../services/firebaseService';
+import { subscribeToUserUpdates, subscribeToPartnerUpdates, subscribeToHeartbeats } from '../services/firebaseService';
 
 interface AppState {
   currentUser: User | null;
@@ -11,6 +11,8 @@ interface AppState {
   galleryEntries: GalleryEntry[];
   settings: AppSettings;
   isLoading: boolean;
+  heartbeats: Heartbeat[];
+  pendingHeartbeat: Heartbeat | null;
 }
 
 type AppAction =
@@ -21,11 +23,13 @@ type AppAction =
   | { type: 'ADD_GALLERY_ENTRY'; payload: GalleryEntry }
   | { type: 'UPDATE_SETTINGS'; payload: Partial<AppSettings> }
   | { type: 'SET_LOADING'; payload: boolean }
-  | { type: 'CLEAR_USER_DATA' };
+  | { type: 'CLEAR_USER_DATA' }
+  | { type: 'ADD_HEARTBEAT'; payload: Heartbeat }
+  | { type: 'SET_PENDING_HEARTBEAT'; payload: Heartbeat | null };
 
 const initialState: AppState = {
   currentUser: null, // Start with no user logged in
-  partner: mockUsers[1], // Default to second user for testing
+  partner: null, // Default to second user for testing
   challenges: mockChallenges,
   galleryEntries: mockGalleryEntries,
   settings: {
@@ -35,6 +39,8 @@ const initialState: AppState = {
     soundEnabled: true,
   },
   isLoading: false,
+  heartbeats: [],
+  pendingHeartbeat: null,
 };
 
 function appReducer(state: AppState, action: AppAction): AppState {
@@ -67,7 +73,17 @@ function appReducer(state: AppState, action: AppAction): AppState {
     case 'SET_LOADING':
       return { ...state, isLoading: action.payload };
     case 'CLEAR_USER_DATA':
-      return { ...state, currentUser: null, partner: null };
+      return { ...state, currentUser: null, partner: null, heartbeats: [], pendingHeartbeat: null };
+    case 'ADD_HEARTBEAT':
+      return {
+        ...state,
+        heartbeats: [action.payload, ...state.heartbeats],
+      };
+    case 'SET_PENDING_HEARTBEAT':
+      return {
+        ...state,
+        pendingHeartbeat: action.payload,
+      };
     default:
       return state;
   }
@@ -84,6 +100,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [state, dispatch] = useReducer(appReducer, initialState);
   const userUnsubscribeRef = useRef<(() => void) | null>(null);
   const partnerUnsubscribeRef = useRef<(() => void) | null>(null);
+  const heartbeatsUnsubscribeRef = useRef<(() => void) | null>(null);
 
   // Load user data from AsyncStorage on app start
   useEffect(() => {
@@ -137,6 +154,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       partnerUnsubscribeRef.current();
       partnerUnsubscribeRef.current = null;
     }
+    if (heartbeatsUnsubscribeRef.current) {
+      heartbeatsUnsubscribeRef.current();
+      heartbeatsUnsubscribeRef.current = null;
+    }
 
     // Set up new listeners if user exists
     if (state.currentUser?.id) {
@@ -171,6 +192,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         });
       }
+
+      // Listen to heartbeats for the current user
+      heartbeatsUnsubscribeRef.current = subscribeToHeartbeats(state.currentUser.id, (heartbeat) => {
+        if (heartbeat) {
+          // Always add to heartbeats list
+          dispatch({ type: 'ADD_HEARTBEAT', payload: heartbeat });
+          
+          // Set as pending heartbeat - HomeScreen will handle modal display and clearing
+          dispatch({ type: 'SET_PENDING_HEARTBEAT', payload: heartbeat });
+        }
+      });
     }
 
     // Cleanup function
@@ -180,6 +212,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       if (partnerUnsubscribeRef.current) {
         partnerUnsubscribeRef.current();
+      }
+      if (heartbeatsUnsubscribeRef.current) {
+        heartbeatsUnsubscribeRef.current();
       }
     };
   }, [state.currentUser?.id]); // Only depend on user ID, not partnerId

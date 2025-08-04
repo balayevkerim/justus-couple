@@ -16,6 +16,7 @@ import LoginScreen from '../screens/LoginScreen';
 import PartnerConnectionScreen from '../screens/PartnerConnectionScreen';
 import ChallengeDetailScreen from '../screens/ChallengeDetailScreen';
 import AddGalleryEntryScreen from '../screens/AddGalleryEntryScreen';
+import SendHeartbeatScreen from '../screens/SendHeartbeatScreen';
 
 const Tab = createBottomTabNavigator();
 const Stack = createStackNavigator();
@@ -32,6 +33,11 @@ function HomeStack() {
         name="ChallengeDetail" 
         component={ChallengeDetailScreen}
         options={{ title: 'Daily Challenge' }}
+      />
+      <Stack.Screen 
+        name="SendHeartbeat" 
+        component={SendHeartbeatScreen}
+        options={{ headerShown: false }}
       />
     </Stack.Navigator>
   );
